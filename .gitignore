@@ -1,0 +1,53 @@
+# Секреты и переменные окружения
+.env
+.env.*
+!.env.example
+
+# Виртуальное окружение
+venv/
+.venv/
+env/
+ENV/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# Тесты и инструменты
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.tox/
+
+# Данные бота (база SQLite)
+data/*.db
+data/*.db-journal
+data/*.sqlite
+data/*.sqlite3
+*.db-wal
+*.db-shm
+
+# Логи (папку сохраняем через .gitkeep)
+logs/*
+!logs/.gitkeep
+*.log
+
+# IDE и редакторы
+.vscode/
+.idea/
+.cursor/
+*.swp
+*.swo
+
+# Системные файлы
+.DS_Store
+Thumbs.db
+desktop.ini
