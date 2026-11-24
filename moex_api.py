@@ -14,11 +14,16 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import ssl
+import tempfile
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
+from functools import lru_cache
+from pathlib import Path
 from typing import Any
 
 import aiohttp
+import certifi
 
 from config import (
     HTTP_RETRIES,
@@ -28,7 +33,10 @@ from config import (
     MOEX2_SECID,
     MOEX_ISS_BASE,
     MOEX_SECID,
+    MOEX_SSL_VERIFY,
     MSK,
+    RUSSIAN_TRUSTED_ROOT_CA,
+    RUSSIAN_TRUSTED_SUB_CA,
 )
 from utils import now_msk
 
@@ -108,11 +116,61 @@ _HTTP_HEADERS = {
 }
 
 
+def _cert_to_pem(raw: bytes) -> str:
+    text = raw.decode("ascii", errors="ignore").strip()
+    if "BEGIN CERTIFICATE" in text:
+        return text + "\n"
+    return ssl.DER_cert_to_PEM_cert(raw)
+
+
+@lru_cache(maxsize=1)
+def _ssl_context() -> ssl.SSLContext | bool:
+    """
+    SSL-контекст для ISS MOEX.
+
+    Биржа использует сертификаты НУЦ Минцифры; их нет в стандартном
+    CA-бандле Python. Подмешиваем корневой и выпускающий из certs/.
+    См. https://www.moex.com/kak-sohranit-dostup-k-servisam-birzhi
+    """
+    if not MOEX_SSL_VERIFY:
+        logger.warning("MOEX_SSL_VERIFY=false — проверка TLS отключена")
+        return False
+
+    parts = [Path(certifi.where()).read_text(encoding="utf-8")]
+    for path in (RUSSIAN_TRUSTED_ROOT_CA, RUSSIAN_TRUSTED_SUB_CA):
+        if not path.is_file():
+            raise FileNotFoundError(
+                f"Не найден сертификат НУЦ: {path}. "
+                "Скачайте с https://gu-st.ru/content/Other/doc/ "
+                "или см. https://www.moex.com/kak-sohranit-dostup-k-servisam-birzhi"
+            )
+        parts.append(_cert_to_pem(path.read_bytes()))
+
+    # create_default_context читает cafile при создании — временный PEM можно удалить
+    bundle_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            suffix=".pem",
+            delete=False,
+        ) as bundle:
+            bundle.write("\n".join(parts))
+            bundle_path = Path(bundle.name)
+        ctx = ssl.create_default_context(cafile=str(bundle_path))
+        logger.info("SSL для MOEX: certifi + сертификаты НУЦ Минцифры")
+        return ctx
+    finally:
+        if bundle_path is not None:
+            bundle_path.unlink(missing_ok=True)
+
+
 async def _get_json(path: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
     """GET к ISS с повторными попытками и экспоненциальной паузой."""
     url = f"{MOEX_ISS_BASE}{path}"
     query = {"iss.meta": "off", **(params or {})}
     last_error: Exception | None = None
+    ssl_opt = _ssl_context()
 
     for attempt in range(1, HTTP_RETRIES + 1):
         try:
@@ -121,7 +179,7 @@ async def _get_json(path: str, params: dict[str, Any] | None = None) -> dict[str
                 timeout=timeout,
                 headers=_HTTP_HEADERS,
             ) as session:
-                async with session.get(url, params=query) as resp:
+                async with session.get(url, params=query, ssl=ssl_opt) as resp:
                     resp.raise_for_status()
                     return await resp.json(content_type=None)
         except Exception as exc:

@@ -44,3 +44,15 @@ HTTP_RETRIES = 5
 HTTP_RETRY_DELAY = 2.0
 # В 10:00 ISS часто тормозит; явный UA снижает риск блокировок
 HTTP_USER_AGENT = "MOEX-Telegram-Bot/1.0 (+https://github.com/SergeiAlAn/MOEXbot)"
+
+# Проверка TLS для ISS. false — только аварийный режим.
+MOEX_SSL_VERIFY: bool = os.getenv("MOEX_SSL_VERIFY", "true").strip().lower() not in {
+    "0",
+    "false",
+    "no",
+    "off",
+}
+# Сертификаты НУЦ Минцифры (нужны для iss.moex.com)
+CERTS_DIR = BASE_DIR / "certs"
+RUSSIAN_TRUSTED_ROOT_CA = CERTS_DIR / "russian_trusted_root_ca.cer"
+RUSSIAN_TRUSTED_SUB_CA = CERTS_DIR / "russian_trusted_sub_ca.cer"
