@@ -74,7 +74,16 @@ async def job_morning() -> None:
         logger.exception("Не удалось определить торговый день")
         trading = True
 
-    chart_png = await render_moex2_chart_png() if trading else None
+    quotes = None
+    quotes_error: Exception | None = None
+    chart_png = None
+    if trading:
+        try:
+            quotes = await moex_api.get_both_indices()
+        except Exception as exc:
+            logger.exception("Ошибка получения утренних котировок")
+            quotes_error = exc
+        chart_png = await render_moex2_chart_png()
 
     for user in await _recipients():
         chat_id = user["chat_id"]
@@ -93,11 +102,14 @@ async def job_morning() -> None:
         if not _user_wants(user, "morning"):
             continue
 
-        try:
-            moex, moex2 = await moex_api.get_both_indices()
+        if quotes is not None:
+            moex, moex2 = quotes
             text = messages.format_morning_moex2(moex, moex2)
-        except Exception as exc:
-            text = f"⚠️ Ошибка получения утренних данных:\n<code>{exc}</code>"
+        else:
+            text = (
+                "⚠️ Ошибка получения утренних данных:\n"
+                f"<code>{quotes_error}</code>"
+            )
 
         await _safe_send(
             chat_id,
@@ -173,17 +185,25 @@ async def job_interval() -> None:
 async def job_evening() -> None:
     today = now_msk().date()
     chart_png = await render_moex2_chart_png()
+    quotes = None
+    quotes_error: Exception | None = None
+    try:
+        quotes = await moex_api.get_both_indices()
+    except Exception as exc:
+        logger.exception("Ошибка получения вечерних котировок")
+        quotes_error = exc
+
     for user in await _recipients():
         chat_id = user["chat_id"]
         if not _user_wants(user, "evening"):
             continue
         if not await db.is_trading_today(chat_id, today):
             continue
-        try:
-            moex, moex2 = await moex_api.get_both_indices()
+        if quotes is not None:
+            moex, moex2 = quotes
             text = messages.format_day_session(moex, moex2)
-        except Exception as exc:
-            text = f"⚠️ Ошибка итогов дня:\n<code>{exc}</code>"
+        else:
+            text = f"⚠️ Ошибка итогов дня:\n<code>{quotes_error}</code>"
         await _safe_send(
             chat_id,
             text,
@@ -196,6 +216,14 @@ async def job_evening() -> None:
 async def job_midnight() -> None:
     finished_day = (now_msk() - timedelta(minutes=1)).date()
     chart_png = await render_moex2_chart_png()
+    quotes = None
+    quotes_error: Exception | None = None
+    try:
+        quotes = await moex_api.get_both_indices()
+    except Exception as exc:
+        logger.exception("Ошибка получения ночных котировок")
+        quotes_error = exc
+
     for user in await _recipients():
         chat_id = user["chat_id"]
         if not _user_wants(user, "midnight"):
@@ -207,11 +235,11 @@ async def job_midnight() -> None:
             and not user_row.get("trading_today")
         ):
             continue
-        try:
-            moex, moex2 = await moex_api.get_both_indices()
+        if quotes is not None:
+            moex, moex2 = quotes
             text = messages.format_midnight(moex, moex2)
-        except Exception as exc:
-            text = f"⚠️ Ошибка ночных итогов:\n<code>{exc}</code>"
+        else:
+            text = f"⚠️ Ошибка ночных итогов:\n<code>{quotes_error}</code>"
         await _safe_send(
             chat_id,
             text,

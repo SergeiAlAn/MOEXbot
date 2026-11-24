@@ -39,6 +39,8 @@ LOG_DIR = BASE_DIR / "logs"
 LOG_FILE = LOG_DIR / "bot.log"
 
 MOEX_ISS_BASE = "https://iss.moex.com/iss"
-HTTP_TIMEOUT = 20
-HTTP_RETRIES = 3
-HTTP_RETRY_DELAY = 1.5
+HTTP_TIMEOUT = 30
+HTTP_RETRIES = 5
+HTTP_RETRY_DELAY = 2.0
+# В 10:00 ISS часто тормозит; явный UA снижает риск блокировок
+HTTP_USER_AGENT = "MOEX-Telegram-Bot/1.0 (+https://github.com/SergeiAlAn/MOEXbot)"

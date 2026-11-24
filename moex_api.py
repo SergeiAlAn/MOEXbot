@@ -24,6 +24,7 @@ from config import (
     HTTP_RETRIES,
     HTTP_RETRY_DELAY,
     HTTP_TIMEOUT,
+    HTTP_USER_AGENT,
     MOEX2_SECID,
     MOEX_ISS_BASE,
     MOEX_SECID,
@@ -100,8 +101,15 @@ def _rows_to_dicts(block: dict[str, Any]) -> list[dict[str, Any]]:
     return [dict(zip(columns, row)) for row in data]
 
 
+_HTTP_HEADERS = {
+    "User-Agent": HTTP_USER_AGENT,
+    "Accept": "application/json, text/plain, */*",
+    "Accept-Language": "ru-RU,ru;q=0.9,en;q=0.8",
+}
+
+
 async def _get_json(path: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
-    """GET к ISS с повторными попытками."""
+    """GET к ISS с повторными попытками и экспоненциальной паузой."""
     url = f"{MOEX_ISS_BASE}{path}"
     query = {"iss.meta": "off", **(params or {})}
     last_error: Exception | None = None
@@ -109,7 +117,10 @@ async def _get_json(path: str, params: dict[str, Any] | None = None) -> dict[str
     for attempt in range(1, HTTP_RETRIES + 1):
         try:
             timeout = aiohttp.ClientTimeout(total=HTTP_TIMEOUT)
-            async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with aiohttp.ClientSession(
+                timeout=timeout,
+                headers=_HTTP_HEADERS,
+            ) as session:
                 async with session.get(url, params=query) as resp:
                     resp.raise_for_status()
                     return await resp.json(content_type=None)
@@ -123,9 +134,12 @@ async def _get_json(path: str, params: dict[str, Any] | None = None) -> dict[str
                 exc,
             )
             if attempt < HTTP_RETRIES:
-                await asyncio.sleep(HTTP_RETRY_DELAY * attempt)
+                # 2s, 4s, 8s, 16s… — переживает краткие сбои ISS на открытии
+                await asyncio.sleep(HTTP_RETRY_DELAY * (2 ** (attempt - 1)))
 
-    raise RuntimeError(f"Не удалось получить данные MOEX: {url}") from last_error
+    raise RuntimeError(
+        f"Не удалось получить данные MOEX: {url} ({last_error})"
+    ) from last_error
 
 
 def _parse_date(value: Any) -> date | None:
@@ -277,13 +291,34 @@ def _apply_prev_close(quote: IndexQuote, prev_close: float | None) -> IndexQuote
 
 async def _fetch_raw_quote(secid: str, display_name: str) -> IndexQuote:
     """Сырые данные marketdata без бизнес-логики сессий."""
-    payload = await _get_json(
+    # Основной путь + запасной через board SNDX (тот же инструмент)
+    paths = (
         f"/engines/stock/markets/index/securities/{secid}.json",
-        params={"iss.only": "marketdata,securities"},
+        f"/engines/stock/markets/index/boards/SNDX/securities/{secid}.json",
     )
-    market = _rows_to_dicts(payload.get("marketdata", {}))
+    market: list[dict[str, Any]] = []
+    last_error: Exception | None = None
+
+    for path in paths:
+        try:
+            payload = await _get_json(
+                path,
+                params={"iss.only": "marketdata,securities"},
+            )
+            market = _rows_to_dicts(payload.get("marketdata", {}))
+            if market:
+                break
+            last_error = RuntimeError(f"Пустой marketdata для {secid} ({path})")
+            logger.warning("%s", last_error)
+        except Exception as exc:
+            last_error = exc
+            logger.warning("Запасной путь marketdata для %s: %s", secid, exc)
+
     if not market:
-        raise RuntimeError(f"Пустой marketdata для {secid}")
+        raise RuntimeError(
+            f"Пустой marketdata для {secid}"
+            + (f" ({last_error})" if last_error else "")
+        ) from last_error
 
     row = market[0]
     open_value = _to_float(row.get("OPENVALUE"))
